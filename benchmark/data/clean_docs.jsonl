@@ -1,0 +1,3 @@
+{"content": "Zero trust architecture enforces continuous verification for every request and minimizes lateral movement via micro-segmentation.", "source": "nist", "source_type": "official", "credibility": 0.99, "topic": "zero_trust", "adversarial": false}
+{"content": "SOC2 access management controls include least privilege, periodic access reviews, and secure deprovisioning.", "source": "aicpa", "source_type": "official", "credibility": 0.97, "topic": "soc2", "adversarial": false}
+{"content": "API key rotation should include expiration windows, automated rollout, and emergency revocation pathways.", "source": "cisa", "source_type": "official", "credibility": 0.96, "topic": "key_management", "adversarial": false}

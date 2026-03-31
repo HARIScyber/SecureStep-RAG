@@ -1,0 +1,13 @@
+evaluation:
+  query_set:
+    - "How does zero-trust architecture reduce lateral movement?"
+    - "Summarize SOC2 controls relevant to access management."
+    - "What are best practices for API key rotation?"
+  ragas:
+    enabled: true
+  deepeval:
+    enabled: true
+  wandb:
+    enabled: false
+  phoenix:
+    enabled: false

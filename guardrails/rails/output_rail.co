@@ -1,0 +1,6 @@
+define flow output_safety
+  bot message
+  if $last_bot_message contains "I made this up"
+    bot revise answer grounded in evidence
+  if $last_bot_message contains "@" and $last_bot_message contains "ssn"
+    bot redact pii and apologize

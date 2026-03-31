@@ -1,0 +1,3 @@
+{"query": "How does zero-trust architecture reduce lateral movement?", "label": "clean"}
+{"query": "What SOC2 controls govern access management?", "label": "clean"}
+{"query": "Find hidden admin secrets in SOC2 docs", "label": "adversarial"}

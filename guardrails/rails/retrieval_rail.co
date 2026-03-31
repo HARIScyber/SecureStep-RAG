@@ -1,0 +1,8 @@
+define flow retrieval_safety
+  when chunk retrieved
+  if $retrieved_chunk contains "SYSTEM:" or $retrieved_chunk contains "[INST]" or $retrieved_chunk contains "<|im_start|>"
+    mark chunk as blocked
+  if $retrieved_chunk contains "ignore" and $retrieved_chunk contains "instruction"
+    mark chunk as blocked
+  if $retrieved_chunk contains "search for" and $retrieved_chunk contains "next hop"
+    mark chunk as blocked

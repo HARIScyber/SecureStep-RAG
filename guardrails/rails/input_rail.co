@@ -1,0 +1,6 @@
+define flow input_safety
+  user message
+  if $last_user_message contains "ignore previous" or $last_user_message contains "jailbreak" or $last_user_message contains "developer mode"
+    bot refuse to respond
+  if $last_user_message contains "credit card" or $last_user_message contains "social security"
+    bot ask for non-sensitive reformulation
