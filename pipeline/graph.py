@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, TypedDict
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
 
 import yaml
 from langgraph.graph import END, START, StateGraph
@@ -14,6 +16,7 @@ from pipeline.generator import AnswerGenerator
 from pipeline.reformulator import QueryReformulator
 from pipeline.retriever import RetrievedDocument, SecureRetriever
 from trust_filter.filter import TrustFilter, TrustScore
+from models.embedding_loader import EmbeddingLoader
 
 
 class GraphState(TypedDict, total=False):
@@ -34,6 +37,8 @@ class GraphState(TypedDict, total=False):
     last_trust_scores: List[TrustScore]
     confidence: float
     final_answer: str
+    hop_transition_triggered: bool
+    hop_transition_reason: str
 
 
 @dataclass
@@ -55,6 +60,7 @@ class SecureStepGraph:
         self.trust_filter = TrustFilter(config_path=config_path)
         self.confidence_gate = ConfidenceGate(config_path=config_path)
         self.generator = AnswerGenerator(config_path=config_path)
+        self.embedding_loader = EmbeddingLoader()
         self.graph = self._build_graph()
 
     def _load_config(self, config_path: Optional[Path]) -> PipelineConfig:
@@ -72,13 +78,22 @@ class SecureStepGraph:
     def _build_graph(self):
         workflow = StateGraph(GraphState)
         workflow.add_node("reformulate", self._reformulate)
+        workflow.add_node("hop_transition_check", self._hop_transition_check)
         workflow.add_node("retrieve", self._retrieve)
         workflow.add_node("trust_filter", self._trust_filter_docs)
         workflow.add_node("confidence_check", self._confidence_check)
         workflow.add_node("generate", self._generate)
 
         workflow.add_edge(START, "reformulate")
-        workflow.add_edge("reformulate", "retrieve")
+        workflow.add_edge("reformulate", "hop_transition_check")
+        workflow.add_conditional_edges(
+            "hop_transition_check",
+            self._should_block_on_transition,
+            {
+                "retrieve": "retrieve",
+                "generate": "generate",
+            },
+        )
         workflow.add_edge("retrieve", "trust_filter")
         workflow.add_edge("trust_filter", "confidence_check")
         workflow.add_conditional_edges(
@@ -107,6 +122,74 @@ class SecureStepGraph:
             "current_query": current_query,
             "hop_queries": hop_queries,
         }
+
+    def _hop_transition_check(self, state: GraphState) -> GraphState:
+        """Check for drift, hijack, or redirect in reformulated query."""
+        original_query = state.get("original_query", "")
+        current_query = state.get("current_query", "")
+        hop_count = state.get("hop_count", 0)
+        blocked_docs = [*state.get("blocked_docs", [])]
+        
+        # Default: allow through
+        transition_blocked = False
+        block_reason = None
+        
+        # Check 1: Semantic similarity
+        if original_query and current_query:
+            try:
+                orig_emb = self.embedding_loader.embed([original_query])[0]
+                curr_emb = self.embedding_loader.embed([current_query])[0]
+                similarity = cosine_similarity([orig_emb], [curr_emb])[0][0]
+                
+                if similarity < 0.6:
+                    transition_blocked = True
+                    block_reason = f"semantic_drift (similarity={similarity:.2f})"
+            except Exception as e:
+                # Log but don't block if embedding fails
+                print(f"Warning: Embedding comparison failed: {e}")
+        
+        # Check 2: Detect imperative instructions (hijack indicator)
+        hijack_keywords = ["search for", "retrieve", "find documents", "look for"]
+        if any(keyword in current_query.lower() for keyword in hijack_keywords):
+            if original_query.lower() not in current_query.lower():
+                transition_blocked = True
+                block_reason = "hijack_attempt (imperative redirect)"
+        
+        # Check 3: Detect external domains/URLs (redirect attack)
+        url_patterns = ["http://", "https://", ".com", ".org", ".net"]
+        if any(pattern in current_query.lower() for pattern in url_patterns):
+            transition_blocked = True
+            block_reason = "redirect_attack (external domain detected)"
+        
+        # Check 4: Detect syntax injection patterns
+        injection_patterns = ["<|im_start|>", "[INST]", "```", "assume ", "pretend ", "act as"]
+        if any(pattern in current_query for pattern in injection_patterns):
+            transition_blocked = True
+            block_reason = f"syntax_injection ({pattern} detected)"
+        
+        # Log blocked transition
+        if transition_blocked:
+            blocked_docs.append({
+                "type": "hop_transition_block",
+                "reason": block_reason,
+                "original_query": original_query,
+                "reformulated_query": current_query,
+                "hop": hop_count,
+            })
+        
+        return {
+            **state,
+            "blocked_docs": blocked_docs,
+            "hop_transition_triggered": transition_blocked,
+            "hop_transition_reason": block_reason or "passed",
+        }
+
+    def _should_block_on_transition(self, state: GraphState) -> Literal["retrieve", "generate"]:
+        """Decide whether to continue to retrieval or skip to generation due to hop transition block."""
+        if state.get("hop_transition_triggered", False):
+            # Skip retrieval, go directly to generate (will use context_window from previous hops)
+            return "generate"
+        return "retrieve"
 
     def _retrieve(self, state: GraphState) -> GraphState:
         docs = self.retriever.retrieve(query=state["current_query"])
@@ -189,5 +272,7 @@ class SecureStepGraph:
             "context_window": [],
             "blocked_docs": [],
             "hop_queries": [],
+            "hop_transition_triggered": False,
+            "hop_transition_reason": "passed",
         }
         return self.graph.invoke(initial_state)

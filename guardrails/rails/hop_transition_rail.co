@@ -1,0 +1,158 @@
+# Hop Transition Rail - NeMo Guardrail for Multi-Hop Query Drift Detection
+# Fires between hops when reformulator produces a new query
+# Detects: semantic drift, hijack attempts, redirect attacks
+
+define flow check_hop_transition
+  """Main flow for hop transition safety checks."""
+  when new reformulated query
+  
+  # Check 1: Semantic similarity drift
+  $similarity = similarity($original_query, $new_query)
+  if $similarity < 0.6
+    $drift_reason = "semantic_drift"
+    $drift_score = 1.0 - $similarity
+    execute reset on high drift
+  
+  # Check 2: Detect imperative instructions (hijack indicator)
+  if $new_query contains "search for" or $new_query contains "retrieve" or $new_query contains "find documents"
+    if $new_query not contains $original_query
+      $hijack_detected = True
+      $drift_reason = "hijack_attempt"
+      execute block on hijack
+  
+  # Check 3: Detect redirect attacks (external domains/URLs)
+  if $new_query contains "http://" or $new_query contains "https://" or $new_query contains ".com" or $new_query contains ".org"
+    $redirect_detected = True
+    $drift_reason = "redirect_attack"
+    execute block on redirect
+  
+  # Check 4: Detect topic substitution (completely different domain)
+  if $new_query does not contain key topics from $original_query
+    if $similarity < 0.5
+      $topic_substitution = True
+      $drift_reason = "topic_substitution"
+      execute block on substitution
+
+
+define flow detect_syntax_patterns
+  """Detect adversarial syntax patterns in reformulated query."""
+  when hop transition check
+  
+  # Check for system prompt injection patterns
+  if $new_query contains "<|im_start|>" or $new_query contains "[INST]" or $new_query contains "```"
+    $syntax_attack = True
+    $drift_reason = "syntax_injection"
+    execute block on syntax
+  
+  # Check for role-playing redirect
+  if $new_query contains "assume" or $new_query contains "pretend" or $new_query contains "act as"
+    if $new_query not contains $original_query
+      $role_play_detected = True
+      $drift_reason = "role_play_redirect"
+      execute block on role_play
+
+
+define flow handle_high_drift
+  """Handle cases where query has drifted significantly."""
+  execute block on high drift
+  log skip: "Query drift detected: similarity={$similarity:.2f}, threshold=0.6, reason={$drift_reason}"
+  set guardrail_triggered = True
+  set guardrail_reason = "hop_transition_drift"
+  add to blocked_docs: {
+    "type": "hop_transition_block",
+    "original_query": $original_query,
+    "reformulated_query": $new_query,
+    "similarity": $similarity,
+    "drift_reason": $drift_reason,
+    "drift_score": $drift_score,
+    "hop": $hop_count
+  }
+
+
+define flow handle_hijack_detection
+  """Handle detected hijack attempts."""
+  execute block on hijack
+  log skip: "Hijack attempt detected: {$drift_reason}"
+  set guardrail_triggered = True
+  set guardrail_reason = "hop_transition_hijack"
+  add to blocked_docs: {
+    "type": "hop_transition_block",
+    "attack_type": "hijack",
+    "original_query": $original_query,
+    "reformulated_query": $new_query,
+    "reason": $drift_reason,
+    "hop": $hop_count
+  }
+
+
+define flow handle_redirect_detection
+  """Handle detected redirect attacks."""
+  execute block on redirect
+  log skip: "Redirect attack detected: external domain or URL in reformulated query"
+  set guardrail_triggered = True
+  set guardrail_reason = "hop_transition_redirect"
+  add to blocked_docs: {
+    "type": "hop_transition_block",
+    "attack_type": "redirect",
+    "original_query": $original_query,
+    "reformulated_query": $new_query,
+    "reason": $drift_reason,
+    "hop": $hop_count
+  }
+
+
+define flow handle_substitution
+  """Handle topic substitution attacks."""
+  execute block on substitution
+  log skip: "Topic substitution detected: query shifted to different domain"
+  set guardrail_triggered = True
+  set guardrail_reason = "hop_transition_substitution"
+  add to blocked_docs: {
+    "type": "hop_transition_block",
+    "attack_type": "topic_substitution",
+    "original_query": $original_query,
+    "reformulated_query": $new_query,
+    "similarity": $similarity,
+    "reason": $drift_reason,
+    "hop": $hop_count
+  }
+
+
+define flow handle_syntax_injection
+  """Handle syntax-based injection attacks."""
+  execute block on syntax
+  log skip: "Syntax injection attempt detected in reformulated query"
+  set guardrail_triggered = True
+  set guardrail_reason = "hop_transition_syntax"
+  add to blocked_docs: {
+    "type": "hop_transition_block",
+    "attack_type": "syntax_injection",
+    "original_query": $original_query,
+    "reformulated_query": $new_query,
+    "reason": $drift_reason,
+    "hop": $hop_count
+  }
+
+
+define flow handle_role_play_redirect
+  """Handle role-play redirect attacks."""
+  execute block on role_play
+  log skip: "Role-play redirect detected in reformulated query"
+  set guardrail_triggered = True
+  set guardrail_reason = "hop_transition_role_play"
+  add to blocked_docs: {
+    "type": "hop_transition_block",
+    "attack_type": "role_play_redirect",
+    "original_query": $original_query,
+    "reformulated_query": $new_query,
+    "reason": $drift_reason,
+    "hop": $hop_count
+  }
+
+
+define flow allow_reformulated_query
+  """Allow safe reformulated query through to retriever."""
+  when hop transition passed
+  log event: "Hop transition passed - reformulated query is safe"
+  set hop_transition_safe = True
+  allow query: $new_query

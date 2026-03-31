@@ -10,6 +10,10 @@ rails:
   retrieval:
     flows:
       - retrieval_safety
+  transition:
+    flows:
+      - check_hop_transition
+      - detect_syntax_patterns
   output:
     flows:
       - output_safety
